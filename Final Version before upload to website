@@ -1,0 +1,163 @@
+// Final version for upload to website 
+# Populate player names in the dropdown (selectInput)
+  
+    query <- glue::glue("
+      SELECT DISTINCT playername FROM force_plate_data_t
+  ")
+    
+    df <- dbGetQuery(con, query)
+    
+    dbDisconnect(con)
+    
+    updateSelectInput(session, "player", choices = unique(df$playername))
+  })
+  
+  # Automatically set date range based on the selected player
+  observeEvent(input$player, {
+    req(input$player)  # Ensure a player is selected
+    
+    
+    # Query the earliest and latest date for the selected player
+    query <- glue::glue("
+      SELECT MIN(date) AS earliest_date, MAX(date) AS latest_date
+      FROM force_plate_data_t
+      WHERE playername = '{input$player}'
+  ")
+    
+    df_dates <- dbGetQuery(con, query)
+    
+    dbDisconnect(con)
+    
+    # Update the date range input based on the earliest and latest date for the selected player
+    updateDateRangeInput(session, "dateRange", 
+                         start = as.Date(df_dates$earliest_date), 
+                         end = as.Date(df_dates$latest_date),
+                         min = as.Date(df_dates$earliest_date), 
+                         max = as.Date(df_dates$latest_date))
+  })
+  
+
+  forcePlateDates <- reactive({
+    
+         
+        query <- glue::glue("
+            SELECT date FROM force_plate_data_t
+        ")
+
+        df <- dbGetQuery(con, query)
+    
+  })  
+  
+  filteredData <- reactive({
+    
+    
+    query <- glue::glue("
+      SELECT playername, date, position, cmjheight, arbf, bni, arpf, pni, jump_momentum, peak_rel_prop_power, 
+      mrsi, body_weight, lr_brake_index, lr_prop_index
+      FROM force_plate_data_t
+  ")
+    
+    df <- dbGetQuery(con, query)
+    
+    dbDisconnect(con)
+    
+    req(input$player, input$dateRange)
+    
+    # Filter data based on selected player and date range
+    df_filtered <- df %>%
+      filter(playername == input$player) %>%
+      filter(as.Date(date) >= input$dateRange[1] & as.Date(date) <= input$dateRange[2])
+    
+    return(df_filtered)
+  })
+  
+  # Summary statistics for key metrics (CMJ Height, ARPF, PNI)
+  output$summaryStats <- renderText({
+    req(filteredData())
+    summary_stats <- filteredData() %>%
+      summarise(
+        CMJ_Height_Mean = mean(cmjheight, na.rm = TRUE),
+        CMJ_Height_SD = sd(cmjheight, na.rm = TRUE),
+        CMJ_Height_Range = paste(min(cmjheight, na.rm = TRUE), "-", max(cmjheight, na.rm = TRUE)),
+        ARPF_Mean = mean(arpf, na.rm = TRUE),
+        ARPF_SD = sd(arpf, na.rm = TRUE),
+        ARPF_Range = paste(min(arpf, na.rm = TRUE), "-", max(arpf, na.rm = TRUE)),
+        PNI_Mean = mean(pni, na.rm = TRUE),
+        PNI_SD = sd(pni, na.rm = TRUE),
+        PNI_Range = paste(min(pni, na.rm = TRUE), "-", max(pni, na.rm = TRUE))
+      )
+    
+    paste("CMJ Height (Mean):", round(summary_stats$CMJ_Height_Mean, 2),
+          "\nCMJ Height (SD):", round(summary_stats$CMJ_Height_SD, 2),
+          "\nCMJ Height (Range):", summary_stats$CMJ_Height_Range,
+          "\nARPF (Mean):", round(summary_stats$ARPF_Mean, 2),
+          "\nARPF (SD):", round(summary_stats$ARPF_SD, 2),
+          "\nARPF (Range):", summary_stats$ARPF_Range,
+          "\nPNI (Mean):", round(summary_stats$PNI_Mean, 2),
+          "\nPNI (SD):", round(summary_stats$PNI_SD, 2),
+          "\nPNI (Range):", summary_stats$PNI_Range)
+  })
+  
+  
+  # Plot the selected metric
+  output$metricPlot <- renderPlot({
+    req(filteredData())
+    
+    # Ensure 'Date' is properly converted to Date type in the filtered dataset
+    filtered_data <- filteredData() %>%
+      mutate(date = as.Date(date, format = "%m/%d/%Y"))  # Adjust format if needed
+    
+    # Get the selected metric from input
+    metric_col <- input$metric
+    
+    # Use 'aes_string' with 'Date' as a string
+    ggplot(filtered_data, aes_string(x = filtered_data$date, y = metric_col)) +
+      geom_line() + 
+      geom_point() +
+      scale_x_date(date_labels = "%m/%d/%Y", date_breaks = "1 month") +  # Ensure proper date handling
+      labs(title = paste("Metric:", metric_col, "for", input$player),
+           x = filtered_data$date, y = metric_col) +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 90, hjust = 1))
+  })
+  
+
+  
+  # Scatterplot of selected metrics
+  output$scatterPlot <- renderPlot({
+    req(filteredData())
+    
+    # Get the selected x and y metrics from input
+    x_metric <- input$xMetric
+    y_metric <- input$yMetric
+    
+    ggplot(filteredData(), aes_string(x = x_metric, y = y_metric)) +
+      geom_point() +
+      geom_smooth(method = "lm", se = FALSE, color = "blue") +  # Add linear trendline
+      labs(title = paste("Scatterplot of", x_metric, "vs", y_metric),
+           x = x_metric, y = y_metric) +
+      theme_minimal()
+  })
+  
+  # Metric definitions
+  metricDefinitions <- list(
+    "cmjheight" = "• Definition: This refers to the height (in centimeters) an athlete achieves during a Countermovement Jump (CMJ), a common test to assess lower-body power.\n• Why it’s important: CMJ height is a direct measure of an athlete’s explosive strength and jump performance. A higher jump indicates better lower body power output.",
+    "arbf" = "• Definition: ARBF stands for Average Reactive Braking Force. It measures the braking force applied by the athlete during landing.\n• Why it’s important: It indicates how well an athlete can decelerate after a jump, which is crucial for injury prevention and performance efficiency.",
+    "bni" = "• Definition: BNI (Braking Net Impulse) refers to the total braking force exerted during landing.\n• Why it’s important: BNI shows how much force is used to decelerate, which helps in understanding the athlete's braking control.",
+    "arpf" = "• Definition: ARPF stands for Average Relative Propulsive Force. It measures the amount of force used by the athlete during the propulsive phase of the jump.\n• Why it’s important: Higher ARPF indicates better explosiveness and power generation in the jump.",
+    "pni" = "• Definition: PNI (Propulsive Net Impulse) measures the net force used during the propulsive phase of the jump.\n• Why it’s important: It gives insights into how much force is generated by the athlete to push off the ground.",
+    "jump_momentum" = "• Definition: This metric refers to the overall momentum generated during the jump, combining mass and velocity.\n• Why it’s important: Momentum indicates the overall efficiency of force production during a jump, helping coaches evaluate an athlete’s explosive capabilities.",
+    "peak_rel_prop_power" = "• Definition: Peak Relative Propulsive Power refers to the maximum power output during the jump, adjusted for the athlete's body weight.\n• Why it’s important: It’s a key indicator of explosive power, adjusted for the athlete’s size, which helps compare athletes of different body weights.",
+    "mrsi" = "• Definition: mRSI stands for Modified Reactive Strength Index. It’s a ratio of jump height to ground contact time during a jump.\n• Why it’s important: Higher mRSI indicates better reactive strength, a crucial component of athletic performance, especially in sports requiring repeated jumps.",
+    "body_weight" = "• Definition: The athlete’s body weight, measured in kilograms.\n• Why it’s important: Body weight is crucial for normalizing performance metrics and comparing force generation relative to mass.",
+    "lr_brake_index" = "• Definition: L/R Brake Index measures the balance between the left and right legs during the braking phase of the jump.\n• Why it’s important: Imbalances can highlight potential injury risks or weaknesses in one leg compared to the other.",
+    "lr_prop_index" = "• Definition: L/R Propulsion Index measures the balance between the left and right legs during the propulsion phase of the jump.\n• Why it’s important: Similar to the brake index, this highlights any imbalances in force production between the legs."
+  )
+  
+  # Display metric definition based on the selected metric
+  output$metricDefinition <- renderText({
+    req(input$metric)
+    metricDefinitions[[input$metric]]
+  })
+
+  
